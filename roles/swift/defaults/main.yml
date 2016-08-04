@@ -1,0 +1,37 @@
+---
+swift:
+  apt_dependencies:
+    - curl
+    - gcc
+    - memcached
+    - rsync
+    - sqlite3
+    - xfsprogs
+    - git-core
+    - libffi-dev
+    - python-setuptools
+    - liberasurecode-dev
+    - libssl-dev
+    - python-coverage
+    - python-dev
+    - python-nose
+    - python-xattr
+    - python-eventlet
+    - python-greenlet
+    - python-pastedeploy
+    - python-netifaces
+    - python-dnspython
+    - python-mock
+    - build-essential
+    - gettext
+    - git-review
+
+git:
+  user: "{{ git_user }}"
+  email: "{{ git_email }}"
+gerrit:
+  user: "{{ gerrit_user }}"
+  password: "{{ gerrit_password }}"
+
+username: vagrant
+group: vagrant

@@ -1,0 +1,2 @@
+[swift]
+localhost ansible_connection=local ansible_become=yes

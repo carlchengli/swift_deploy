@@ -1,0 +1,7 @@
+---
+- name: restart jenkins
+  service: name=jenkins state=restarted
+
+- name: restart rsyslog
+  service: name=rsyslog state=restarted
+  

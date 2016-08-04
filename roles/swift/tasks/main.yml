@@ -1,0 +1,214 @@
+---
+- name: Install apt dependencies
+  apt: name={{ item }} state=present
+  with_items: "{{ swift.apt_dependencies }}"
+  tags: apt
+
+- name: assure /srv directory exists
+  file: path=/srv state=directory
+  tags: fs
+  
+- name: create loopback device 
+  command: truncate -s 1GB /srv/swift-disk creates=/srv/swift-disk
+  tags: fs
+  
+- name: create filesystem /srv/swift-disk
+  filesystem: fstype=xfs dev=/srv/swift-disk
+  tags: fs
+  
+- name: create mount path /mnt/sdb1
+  file: path=/mnt/sdb1 state=directory  
+  tags: fs
+
+- name: mount /mnt/sdb1
+  mount: name=/mnt/sdb1 src=/srv/swift-disk fstype=xfs opts="loop,noatime,nodiratime,nobarrier,logbufs=8" dump=0 passno=0 state=mounted  
+  tags: fs
+  
+- name: create sub-partitions
+  file: >
+    path=/mnt/sdb1/{{ item }}
+    state=directory
+    owner={{ username }}
+    group={{ group }}
+  with_items:
+    - 1
+    - 2
+    - 3
+    - 4
+  tags: fs
+  
+- name: create symlinks
+  sudo: yes
+  file: >
+    src=/mnt/sdb1/{{ item }}
+    dest=/srv/{{ item }}
+    owner={{ username }}
+    group={{ group }}
+    state=link
+  with_items:
+    - 1
+    - 2
+    - 3
+    - 4 
+  tags: fs
+  
+- name: create node partition directories
+  file: >
+    path=/srv/{{ item.node }}/node/sdb{{ item.part }}
+    owner={{ username }}
+    group={{ group }}
+    state=directory
+  with_items:
+    - { node: 1, part: 1 }
+    - { node: 2, part: 2 }
+    - { node: 3, part: 3 }
+    - { node: 4, part: 4 }
+    - { node: 1, part: 5 }
+    - { node: 2, part: 6 }
+    - { node: 3, part: 7 }
+    - { node: 4, part: 8 }
+  tags: fs
+  
+- name: create node partition directories
+  file: >
+    path=/var/run/swift
+    owner={{ username }}
+    group={{ group }}
+    state=directory
+  tags: fs
+
+- name: create rc.local from template
+  template: src=etc/rc.local.j2 dest=/etc/rc.local owner=root group=root mode=0755
+
+- name: git clone swift
+  git: repo=https://github.com/openstack/swift.git dest=/home/{{ username }}/swift
+  tags: [git_clone,swift]
+
+- name: git clone swift client
+  git: repo=https://github.com/openstack/python-swiftclient.git dest=/home/{{ username }}/python-swiftclient
+  tags: [git_clone,swift_client]
+
+- name: set owner
+  file: >
+    path={{ item }}
+    owner={{ username }}
+    group={{ group }}
+    state=directory
+    recurse=yes
+  with_items:
+    - /home/{{ username }}/swift
+    - /home/{{ username }}/python-swiftclient
+  tags: git_clone
+
+- name: install swift's dependencies
+  pip: requirements=/home/{{ username }}/swift/requirements.txt
+  tags: setup
+
+- name: install swift's test dependencies
+  pip: requirements=/home/{{ username }}/swift/test-requirements.txt
+  tags: setup
+
+- name: build a development installation of swift
+  command: python setup.py develop chdir=/home/{{ username }}/swift
+  tags: setup
+  
+- name: build a development installation of python-swiftclient
+  command: python setup.py develop chdir=/home/{{ username }}/python-swiftclient
+  tags: setup
+  
+- name: create /etc/rsyncd.conf
+  command: cp /home/{{ username }}/swift/doc/saio/rsyncd.conf /etc/
+  tags: rsync
+
+- name: update rsyncd.conf with correct username
+  replace: dest=/etc/rsyncd.conf regexp=<your-user-name> replace={{ username }}
+  tags: rsync
+
+- name: remove rsync disable flag
+  lineinfile: dest=/etc/default/rsync regexp="RSYNC_ENABLE=" line="RSYNC_ENABLE=true"
+  tags: rsync
+
+- name: start rsync
+  service: name=rsync state=restarted enabled=yes
+  register: rsync_result
+  until: rsync_result|success
+  tags: rsync
+
+- name: start memcache
+  service: name=memcached state=started enabled=yes
+  tags: memcached
+
+- name: create rsyslog configuration
+  command: cp /home/{{ username }}/swift/doc/saio/rsyslog.d/10-swift.conf /etc/rsyslog.d/
+  notify: restart rsyslog
+  tags: rsyslog
+
+- name: config owner of rsyslog.conf
+  lineinfile: dest=/etc/rsyslog.conf regexp="PrivDropToGroup" line="$PrivDropToGroup adm"
+  notify: restart rsyslog
+  tags: rsyslog
+
+- name: create node partition directories
+  file: >
+    path=/var/log/swift
+    owner=syslog
+    group=adm
+    mode=0770
+    state=directory
+  tags: rsyslog
+
+- name: put user in adm group
+  user: name="{{ username }} append=yes groups=adm
+  notify: restart rsyslog
+
+- name: clean up /etc/swift directory
+  file: path=/etc/swift state=absent
+  tags: config
+
+- name: create clean /etc/swift
+  command: cp -r /home/{{ username }}/swift/doc/saio/swift /etc/swift
+  tags: config
+
+- name: set correct ownership of /etc/swift
+  file: path=/etc/swift owner={{ username }} group={{ group }} recurse=yes
+  tags: config
+
+- name: find config files to modify user option
+  raw: find /etc/swift/ -name \*.conf
+  register: conf_files
+  tags: config
+
+- name: replace user name
+  replace: dest={{ item }} regexp=<your-user-name> replace={{ username }} 
+  with_items: conf_files.stdout_lines
+  tags: config
+
+- name: remake rings
+  command: /home/{{ username }}/swift/doc/saio/bin/remakerings
+  tags: ring
+  
+- name: sqlite3 configuration
+  copy: src=.sqliterc dest=/home/{{ username }}/.sqliterc owner={{ username }} group={{ group }}
+
+- name: install tox
+  pip: name=tox
+  tags: [test,tox]
+
+- name: commit msg
+  get_url: url=https://review.openstack.org/tools/hooks/commit-msg dest=/home/{{ username }}/{{ item }}/.git/hooks/commit-msg mode=0555
+  with_items:
+    - swift
+    - python-swiftclient
+  tags: git_config
+  
+- name: config swift git
+  vars:
+    project: swift
+  template: src=config.j2 dest=/home/{{ username }}/swift/.git/config owner={{ username }} group={{ group }}
+  tags: git_config
+
+- name: config python-swiftclient git
+  vars:
+    project: python-swiftclient
+  template: src=config.j2 dest=/home/{{ username }}/python-swiftclient/.git/config owner={{ username }} group={{ group }}
+  tags: git_config
